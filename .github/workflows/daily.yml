@@ -1,0 +1,56 @@
+name: ちいかわ占い daily
+
+on:
+  schedule:
+    # 22:15 UTC = 07:15 JST วันถัดไป
+    # UTC อาทิตย์-ศุกร์ = JST จันทร์-เสาร์ (ตรงกับวันที่เว็บอัปเดต)
+    - cron: "15 22 * * 0-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fortune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          pip install playwright requests pillow
+          playwright install --with-deps chromium
+
+      - name: Scrape
+        id: scrape
+        run: python scrape.py >> "$GITHUB_OUTPUT"
+
+      - name: Commit image
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add images/
+          git commit -m "fortune ${{ steps.scrape.outputs.date }}" || exit 0
+          git push
+
+      - name: Push to LINE
+        env:
+          LINE_CHANNEL_ID: ${{ secrets.LINE_CHANNEL_ID }}
+          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          FORTUNE_DATE: ${{ steps.scrape.outputs.date }}
+          IMAGE_URL: >-
+            https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/images/${{ steps.scrape.outputs.date }}.jpg
+        run: |
+          # รอให้ raw.githubusercontent เห็น commit ใหม่
+          sleep 20
+          python push_line.py
+
+      - name: Prune old images
+        run: |
+          ls -1 images/*.jpg 2>/dev/null | sort | head -n -30 | xargs -r git rm --quiet
+          git diff --cached --quiet || (git commit -m "prune" && git push)
